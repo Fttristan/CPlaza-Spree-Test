@@ -108,6 +108,7 @@ placeholder Kubernetes Secrets in one file. Before applying it:
    data.
 3. Set the Spree publishable key, registry credentials, TLS certificate/key,
    and replace the sample container image paths with the published image paths.
+    For Forgejo, also change the registry host in `.dockerconfigjson`.
 4. Replace `store.example.com` with your domain everywhere in the manifest and
    set the three storefront repository variables above to the corresponding
    public URLs. Ensure an NGINX Ingress Controller is installed.

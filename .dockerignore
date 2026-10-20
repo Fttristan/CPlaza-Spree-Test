@@ -4,6 +4,7 @@
 .spree
 apps/storefront
 apps/dashboard/dist
+apps/seller-dashboard/dist
 apps/dashboard/.tanstack
 apps/dashboard/.env*
 apps/seller-dashboard/.env*
