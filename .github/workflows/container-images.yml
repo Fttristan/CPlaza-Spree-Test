@@ -1,0 +1,83 @@
+name: Build and publish container images
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            context: .
+            file: server/Dockerfile
+          - image: storefront
+            context: apps/storefront
+            file: Dockerfile
+          - image: dashboard
+            context: .
+            file: apps/dashboard/Dockerfile
+          - image: seller-dashboard
+            context: .
+            file: apps/seller-dashboard/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate storefront build variables
+        if: matrix.image == 'storefront'
+        env:
+          SPREE_API_URL: ${{ vars.SPREE_API_URL }}
+          SPREE_PUBLISHABLE_KEY: ${{ vars.SPREE_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: |
+          test -n "$SPREE_API_URL" || { echo "::error::Configure SPREE_API_URL."; exit 1; }
+          test -n "$SPREE_PUBLISHABLE_KEY" || { echo "::error::Configure SPREE_PUBLISHABLE_KEY."; exit 1; }
+          test -n "$NEXT_PUBLIC_SITE_URL" || { echo "::error::Configure NEXT_PUBLIC_SITE_URL."; exit 1; }
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SPREE_API_URL=${{ vars.SPREE_API_URL }}
+            SPREE_PUBLISHABLE_KEY=${{ vars.SPREE_PUBLISHABLE_KEY }}
+            NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

@@ -1,0 +1,458 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: creatorplaza-secrets
+  namespace: default
+type: Opaque
+stringData:
+  # Rotate the Neon password shared in the setup request and insert the new
+  # URL here. Kubernetes Secret values are not encrypted in Git or by default
+  # in etcd; use a secret manager for production if available.
+  DATABASE_URL: "postgresql://spree:REPLACE_WITH_ROTATED_NEON_PASSWORD@ep-shy-fog-b4iotkwq-pooler.c-6.us-east-2.aws.neon.tech/spree?sslmode=require&channel_binding=require"
+  SECRET_KEY_BASE: "REPLACE_WITH_OUTPUT_OF_bin_rails_secret"
+  ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY: "REPLACE_WITH_GENERATED_PRIMARY_KEY"
+  ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY: "REPLACE_WITH_GENERATED_DETERMINISTIC_KEY"
+  ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT: "REPLACE_WITH_GENERATED_KEY_DERIVATION_SALT"
+  SPREE_PUBLISHABLE_KEY: "REPLACE_WITH_SPREE_PUBLISHABLE_KEY"
+  AWS_ACCESS_KEY_ID: ""
+  AWS_SECRET_ACCESS_KEY: ""
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: image-pull-secret
+  namespace: default
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: |
+    {"auths":{"ghcr.io":{"username":"REPLACE_WITH_REGISTRY_USERNAME","password":"REPLACE_WITH_REGISTRY_TOKEN"}}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: store-tls
+  namespace: default
+type: kubernetes.io/tls
+stringData:
+  tls.crt: "REPLACE_WITH_TLS_CERTIFICATE_PEM"
+  tls.key: "REPLACE_WITH_TLS_PRIVATE_KEY_PEM"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spree-api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spree-api
+  template:
+    metadata:
+      labels:
+        app: spree-api
+    spec:
+      imagePullSecrets:
+        - name: image-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ghcr.io/OWNER/REPOSITORY/api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: DATABASE_URL
+            - name: SECRET_KEY_BASE
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: SECRET_KEY_BASE
+            - name: ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY
+            - name: ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY
+            - name: ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_REGION
+              value: us-east-2
+            - name: AWS_BUCKET
+              value: creatorplaza-spree-uploads
+            - name: RAILS_ENV
+              value: production
+            - name: RAILS_FORCE_SSL
+              value: "true"
+            - name: RAILS_ASSUME_SSL
+              value: "true"
+            - name: SPREE_HOST
+              value: store.example.com
+            - name: JOB_THREADS
+              value: "3"
+          startupProbe:
+            httpGet:
+              path: /up
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /up
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /up
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spree-api
+  namespace: default
+spec:
+  selector:
+    app: spree-api
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spree-storefront
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spree-storefront
+  template:
+    metadata:
+      labels:
+        app: spree-storefront
+    spec:
+      imagePullSecrets:
+        - name: image-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: storefront
+          image: ghcr.io/OWNER/REPOSITORY/storefront:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: HOSTNAME
+              value: 0.0.0.0
+            - name: SPREE_API_URL
+              value: https://store.example.com
+            - name: SPREE_PUBLISHABLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: creatorplaza-secrets
+                  key: SPREE_PUBLISHABLE_KEY
+            - name: NEXT_PUBLIC_SITE_URL
+              value: https://store.example.com
+            - name: NEXT_PUBLIC_DEFAULT_COUNTRY
+              value: us
+            - name: NEXT_PUBLIC_DEFAULT_LOCALE
+              value: en
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spree-storefront
+  namespace: default
+spec:
+  selector:
+    app: spree-storefront
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spree-dashboard
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spree-dashboard
+  template:
+    metadata:
+      labels:
+        app: spree-dashboard
+    spec:
+      imagePullSecrets:
+        - name: image-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard
+          image: ghcr.io/OWNER/REPOSITORY/dashboard:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 10
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spree-dashboard
+  namespace: default
+spec:
+  selector:
+    app: spree-dashboard
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spree-seller-dashboard
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spree-seller-dashboard
+  template:
+    metadata:
+      labels:
+        app: spree-seller-dashboard
+    spec:
+      imagePullSecrets:
+        - name: image-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: seller-dashboard
+          image: ghcr.io/OWNER/REPOSITORY/seller-dashboard:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 10
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spree-seller-dashboard
+  namespace: default
+spec:
+  selector:
+    app: spree-seller-dashboard
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: creatorplaza
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 50m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - store.example.com
+      secretName: store-tls
+  rules:
+    - host: store.example.com
+      http:
+        paths:
+          - path: /api/webhooks
+            pathType: Prefix
+            backend:
+              service:
+                name: spree-storefront
+                port:
+                  number: 3001
+          - path: /dashboard
+            pathType: Prefix
+            backend:
+              service:
+                name: spree-dashboard
+                port:
+                  number: 8080
+          - path: /sellers
+            pathType: Prefix
+            backend:
+              service:
+                name: spree-seller-dashboard
+                port:
+                  number: 8080
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: spree-api
+                port:
+                  number: 3000
+          - path: /rails
+            pathType: Prefix
+            backend:
+              service:
+                name: spree-api
+                port:
+                  number: 3000
+          - path: /up
+            pathType: Prefix
+            backend:
+              service:
+                name: spree-api
+                port:
+                  number: 3000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: spree-storefront
+                port:
+                  number: 3001
